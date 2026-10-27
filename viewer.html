@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Карта инфраструктуры</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@500;700&display=swap">
+<style>
+/* Layout: full-bleed 3D scene; control bar + breadcrumbs on top, context panel right (bottom sheet on phones). Single dark "ops console" world on purpose. */
+:root{
+  color-scheme: dark;
+  --bg:#0b111b; --bg2:#111a28; --panel:#111a28f0; --line:#24344b; --fg:#dde6f2; --muted:#8798b0; --faint:#56667d;
+  --laptop:#c9d2de; --vps:#4f8dff; --homelab:#f0a43a; --cloud:#a58bdc; --ext:#6fb7a8;
+  --ok:#3fca7a; --warn:#e8c14a; --bad:#ff5d5d; --off:#6b7688;
+  --accent:#4f8dff;
+  --f-display:"Unbounded","Golos Text",system-ui,sans-serif;
+  --f-body:"Golos Text",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-body);overflow:hidden}
+#scene,#graph{position:fixed;inset:0}
+#scene canvas{display:block}
+.css2d{position:fixed;inset:0;pointer-events:none;z-index:1}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.bar{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;
+  padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;background:linear-gradient(var(--bg) 55%,transparent);pointer-events:none}
+.bar>*{pointer-events:auto}
+.brand{font:700 15px/1 var(--f-display);letter-spacing:.02em;white-space:nowrap}
+.brand small{display:block;font:400 11px/1.4 var(--f-mono);color:var(--muted);letter-spacing:0;margin-top:4px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.seg button{border:0;background:none;padding:6px 12px;cursor:pointer;color:var(--muted)}
+.seg button.on{background:var(--line);color:var(--fg)}
+.seg[hidden]{display:none!important}
+.search{position:relative;flex:1 1 220px;max-width:360px;min-width:0}
+.search input{width:100%;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg2)}
+.results{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--bg2);border:1px solid var(--line);border-radius:8px;max-height:50vh;overflow:auto;z-index:9}
+.results div{padding:7px 12px;cursor:pointer;display:flex;gap:8px;align-items:center}
+.results div:hover,.results div.act{background:var(--line)}
+.chipbtn{border:1px solid var(--line);background:var(--bg2);border-radius:8px;padding:6px 10px;cursor:pointer}
+.chipbtn:hover{border-color:var(--muted)}
+.chipbtn .cnt{color:var(--bad);font:12px var(--f-mono);margin-left:4px}
+
+.crumbs{position:fixed;left:16px;top:calc(66px + env(safe-area-inset-top,0px));z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:13px;max-width:calc(100vw - 470px)}
+.crumbs[hidden],.hintline[hidden]{display:none!important}
+.crumbs button{border:1px solid var(--line);background:var(--bg2);border-radius:20px;padding:4px 11px;cursor:pointer;color:var(--muted)}
+.crumbs button:last-child{color:var(--fg);border-color:var(--muted)}
+.crumbs .sep{color:var(--faint);padding:0 2px}
+.hintline{position:fixed;left:16px;bottom:14px;z-index:3;font:11.5px var(--f-mono);color:var(--faint);pointer-events:none;max-width:calc(100vw - 470px)}
+
+/* 3D labels */
+.lbl{pointer-events:auto;cursor:pointer;white-space:nowrap;transition:opacity .25s}
+.lbl-machine{font:700 15px/1.2 var(--f-display);text-align:center;color:#fff;text-shadow:0 1px 8px #000c}
+.lbl-machine small{display:block;font:400 11.5px/1.5 var(--f-mono);color:var(--muted)}
+.lbl-machine .bad,.lbl-contour .bad{color:var(--bad)}
+.lbl-contour{font:600 13px/1.2 var(--f-body);padding:4px 9px;border-radius:20px;background:#0b111bcc;border:1px solid var(--line);display:flex;gap:7px;align-items:center}
+.lbl-contour .n{font:11px var(--f-mono);color:var(--muted)}
+.lbl-contour.dim{opacity:.45}
+.lbl-el{font:12px/1.2 var(--f-body);padding:2px 7px;border-radius:5px;background:#0b111bb8;color:#d5dfec;display:flex;gap:6px;align-items:center;max-width:190px;margin-top:20px;border:1px solid transparent}
+.lbl-el span.t{overflow:hidden;text-overflow:ellipsis}
+.lbl-el.back{opacity:.3}
+.lbl-el.sel{background:#1d2c44;color:#fff;border-color:#9fc0ff}
+.lbl-el .where{font:10.5px var(--f-mono);color:var(--muted)}
+.lbl-link{font:11.5px/1.2 var(--f-mono);padding:3px 8px;border-radius:12px;background:#0b111be6;border:1px solid var(--line);color:#b8c6da}
+.lbl-link:hover,.lbl-contour:hover,.lbl-el:hover{border-color:var(--muted);color:#fff}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block}
+.ring{width:10px;height:10px;border-radius:50%;flex:none;border:2px solid}
+
+/* panel */
+.drawer{position:fixed;right:16px;top:calc(64px + env(safe-area-inset-top,0px));bottom:16px;width:min(430px,calc(100vw - 32px));z-index:6;overflow:auto;padding:18px 20px 22px;border:1px solid var(--line);border-radius:12px;background:var(--panel);backdrop-filter:blur(10px);transition:transform .25s ease}
+.drawer.closed{transform:translateX(calc(100% + 40px))}
+.drawer .close{position:sticky;top:0;float:right;border:0;background:var(--bg);border-radius:6px;padding:2px 9px;cursor:pointer;color:var(--muted);z-index:1}
+.openPanel{position:fixed;right:16px;bottom:16px;z-index:5}
+.drawer .eyebrow{font:600 10.5px/1 var(--f-body);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px;display:flex;gap:6px;align-items:center}
+.drawer h2{font:600 20px/1.25 var(--f-display);margin:0 0 4px;text-wrap:balance;letter-spacing:-.005em}
+.drawer .id{font:12px var(--f-mono);color:var(--faint);word-break:break-all}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
+.pill{font:11.5px/1 var(--f-mono);padding:5px 8px;border-radius:20px;border:1px solid var(--line);color:var(--muted);display:inline-flex;gap:6px;align-items:center}
+.pill.st-up{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+.pill.st-down,.pill.st-failed{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
+.pill.st-disabled,.pill.st-mothballed{color:var(--off)}
+.pill.st-partial,.pill.st-unknown,.pill.st-staging{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+.drawer section{margin-top:18px}
+.drawer h4{font:600 10.5px/1 var(--f-body);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:0 0 7px}
+.drawer p{margin:0 0 6px;max-width:65ch}
+.drawer .note{color:var(--muted);font-size:13px;margin-top:4px}
+.tech{font:12.5px/1.55 var(--f-mono);color:#b8c6da;word-break:break-word}
+.row{display:grid;grid-template-columns:auto 1fr auto;gap:2px 9px;align-items:center;padding:7px 8px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.row:hover{background:var(--bg);border-color:var(--line)}
+.row .t{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.row .n{font:11.5px var(--f-mono);color:var(--muted);text-align:right;white-space:nowrap}
+.row .n b{color:var(--bad);font-weight:500}
+.row .v{grid-column:2 / 4;font-size:12.5px;color:var(--muted)}
+.row .v i{font-style:normal;font:11.5px var(--f-mono);color:#9fb3cc}
+.bars{display:flex;height:6px;border-radius:3px;overflow:hidden;margin:10px 0 2px;background:var(--line)}
+.bars span{display:block}
+.back{border:0;background:none;color:var(--accent);cursor:pointer;padding:0;margin-bottom:10px;font-size:13px}
+
+/* graph tab */
+.legend{position:fixed;left:16px;top:calc(70px + env(safe-area-inset-top,0px));bottom:16px;width:236px;z-index:4;overflow:auto;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.legend[hidden]{display:none!important}
+.legend h3{font:600 10.5px/1 var(--f-body);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:16px 0 8px}
+.legend h3:first-child{margin-top:0}
+.legend label{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;font-size:13px}
+.legend label .n{margin-left:auto;font:11px var(--f-mono);color:var(--faint)}
+.legend input{accent-color:var(--accent)}
+.tip{font:13px var(--f-body);background:var(--bg2);border:1px solid var(--line);padding:6px 9px;border-radius:7px;max-width:280px}
+.tip small{display:block;color:var(--muted);font:11px var(--f-mono)}
+
+.modal{position:fixed;inset:0;z-index:20;background:#0009;display:grid;place-items:center;padding:16px}
+.modal[hidden]{display:none!important}
+.modal .box{background:var(--bg2);border:1px solid var(--line);border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:18px 20px}
+.modal h2{font:600 17px var(--f-display);margin:0 0 12px}
+
+@media (max-width:760px){
+  .drawer{top:auto;bottom:0;right:0;left:0;width:auto;max-height:52vh;border-radius:12px 12px 0 0;padding-bottom:calc(22px + env(safe-area-inset-bottom,0px))}
+  .drawer.closed{transform:translateY(100%)}
+  .crumbs,.hintline{max-width:calc(100vw - 32px)}
+  .hintline{display:none}
+  .legend{display:none}
+  .brand small{display:none}
+  .brand{display:none}
+  .crumbs{top:calc(104px + env(safe-area-inset-top,0px))}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div id="graph" hidden></div>
+
+<header class="bar">
+  <div class="brand">Карта инфраструктуры<small id="snap"></small></div>
+  <div class="seg" role="group" aria-label="Вид">
+    <button id="tabOverview" class="on">Обзор</button><button id="tabGraph">Граф связей</button>
+  </div>
+  <div class="seg" id="graphModes" hidden>
+    <button id="m3" class="on">3D</button><button id="m2">2D</button>
+  </div>
+  <div class="search"><input id="q" placeholder="Найти: бот, домен, воркер…" autocomplete="off"><div class="results" id="res" hidden></div></div>
+  <button class="chipbtn" id="probBtn">Проблемы<span class="cnt" id="probCnt"></span></button>
+</header>
+
+<nav class="crumbs" id="crumbs" aria-label="Где я"></nav>
+<div class="hintline" id="hint"></div>
+
+<aside class="legend" id="legend" hidden>
+  <h3>Машина</h3><div id="fHost"></div>
+  <h3>Статус</h3><div id="fStatus"></div>
+  <h3>Контур</h3><div id="fGroup"></div>
+</aside>
+
+<aside class="drawer" id="drawer" aria-live="polite"></aside>
+<button class="chipbtn openPanel" id="openPanel" hidden>Панель</button>
+<div class="modal" id="modal" hidden><div class="box" id="modalBox"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/force-graph@1.47.4/dist/force-graph.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/renderers/CSS2DRenderer.js"></script>
+<script>
+const DATA = /*DATA*/null;
+
+/* ---------- shared data ---------- */
+const HOSTS = DATA.hosts, GROUPS = DATA.groups;
+const HOST_ORDER = (DATA.hostOrder||Object.keys(HOSTS)).filter(h=>HOSTS[h]);
+const STATUS = {
+  up:{label:'работает',c:'--ok'}, partial:{label:'частично',c:'--warn'}, staging:{label:'стенд / не включено',c:'--warn'},
+  failed:{label:'упал',c:'--bad'}, down:{label:'не запущен',c:'--bad'}, disabled:{label:'выключен намеренно',c:'--off'},
+  mothballed:{label:'законсервирован',c:'--off'}, unknown:{label:'не проверен',c:'--off'}
+};
+const BAD = new Set(['failed','down','partial']);
+const GROUP_INFO = Object.fromEntries(Object.entries(GROUPS).map(([k,g])=>[k,g.info||'']));
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hostOf = h => HOSTS[h]||HOSTS.cloud;
+const hostShort = h => hostOf(h).label.split(' ·')[0];
+const hostColor = h => css(hostOf(h).c);
+const statusOf = n => n.status in STATUS ? n.status : 'unknown';
+const statusColor = s => css((STATUS[s]||STATUS.unknown).c);
+const groupColor = g => (GROUPS[g]||{c:'#8798b0'}).c;
+const groupLabel = g => (GROUPS[g]||{label:g}).label;
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const plural = (n,a,b,c) => { const m=n%10, h=n%100; return n+' '+(m===1&&h!==11?a:m>=2&&m<=4&&(h<10||h>=20)?b:c) };
+
+const byId = new Map(DATA.nodes.map(n=>[n.id,n]));
+DATA.links = DATA.links.filter(l=>byId.has(l.source)&&byId.has(l.target));
+const outL = new Map(), inL = new Map();
+DATA.nodes.forEach(n=>{outL.set(n.id,[]);inL.set(n.id,[])});
+DATA.links.forEach(l=>{outL.get(l.source).push(l);inL.get(l.target).push(l)});
+DATA.nodes.forEach(n=>{n.deg=outL.get(n.id).length+inL.get(n.id).length});
+const MACHINE = {}; DATA.nodes.forEach(n=>{ if(n.kind==='machine') MACHINE[n.host]=n });
+const ELEMS = DATA.nodes.filter(n=>n.kind!=='machine');
+const shortName = n => { let t=n.name.split(/ \(| — | - /)[0].trim(); return t.length>28? t.slice(0,27)+'…' : t; };
+const badCount = arr => arr.filter(n=>BAD.has(n.status)).length;
+
+document.getElementById('snap').textContent = `снимок ${DATA.snapshot} · ${DATA.nodes.length} узлов · ${DATA.links.length} связей`;
+document.getElementById('probCnt').textContent = badCount(DATA.nodes)||'';
+
+/* ---------- hierarchy + layout ---------- */
+function fib(n,r){ if(n===1) return [[0,0,0]]; const pts=[], g=Math.PI*(3-Math.sqrt(5));
+  for(let i=0;i<n;i++){ const y=1-(i/(n-1))*2, rr=Math.sqrt(1-y*y), t=g*i; pts.push([Math.cos(t)*rr*r,y*r,Math.sin(t)*rr*r]); } return pts; }
+const V = (a,b,c)=>new THREE.Vector3(a,b,c);
+const TREE = {};
+function discGrid(n,sx,sy){ // hex-staggered grid inside a circle, nearest-to-centre first
+  if(n===1) return [[0,0]]; const pts=[], K=Math.ceil(Math.sqrt(n))+3;
+  for(let r=-K*2;r<=K*2;r++) for(let c=-K;c<=K;c++){ const x=c*sx+(Math.abs(r)%2)*sx/2, y=r*sy; pts.push([x,y,x*x+y*y*1.6]); }
+  return pts.sort((a,b)=>a[2]-b[2]).slice(0,n); }
+function packCircles(cs){ // greedy spiral packing in the XY plane
+  const placed=[];
+  for(const c of cs){ let t=0, x=0, y=0;
+    for(;;t+=0.04){ x=0.9*t*Math.cos(t); y=0.9*t*Math.sin(t)*0.82;
+      if(placed.every(p=>Math.hypot(p.x-x,p.y-y)>=p.R+c.R+6)) break; }
+    c.x=x; c.y=y; placed.push(c); } }
+for(const h of HOST_ORDER){
+  const els = ELEMS.filter(n=>n.host===h);
+  const groups = {}; els.forEach(n=>(groups[n.group]??=[]).push(n));
+  const cs = Object.entries(groups).map(([g,arr])=>{
+    arr.sort((a,b)=>b.deg-a.deg);
+    const pts = discGrid(arr.length, 14, 3.7);
+    let md=0; pts.forEach(p=>md=Math.max(md,Math.hypot(p[0],p[1])));
+    arr.forEach((n,i)=>n._local=V(pts[i][0], pts[i][1], Math.sin(i*2.39)*1.6));
+    return {g,R:Math.max(md+5,8),elems:arr};
+  }).sort((a,b)=>b.R-a.R);
+  packCircles(cs);
+  let cx=0,cy=0; cs.forEach(c=>{cx+=c.x;cy+=c.y}); cx/=cs.length; cy/=cs.length;
+  cs.forEach((c,i)=>c.local=V(c.x-cx,c.y-cy,Math.sin(i*1.7)*4));
+  let R=0; cs.forEach(c=>R=Math.max(R,Math.hypot(c.local.x,c.local.y)+c.R)); R+=8;
+  TREE[h]={R, contours:Object.fromEntries(cs.map(c=>[c.g,c])), order:cs.map(c=>c.g), elems:els};
+}
+const MACHINE_D = Math.max(...HOST_ORDER.map(h=>TREE[h].R))*2.25;
+{ const D=MACHINE_D, P = Object.fromEntries(HOST_ORDER.map(h=>{ const a=HOSTS[h].pos||[0,0,0]; return [h,V(a[0]*D/400,a[1]*D/440,a[2]*D/400)]; }));
+  HOST_ORDER.forEach(h=>{ TREE[h].pos=P[h]||V(0,0,0); for(const c of Object.values(TREE[h].contours)){ c.pos=TREE[h].pos.clone().add(c.local); c.elems.forEach(n=>n._pos=c.pos.clone().add(n._local)); } }); }
+
+/* ---------- three.js scene ---------- */
+const sceneEl = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setSize(innerWidth,innerHeight);
+renderer.setClearColor(new THREE.Color(css('--bg')));
+sceneEl.appendChild(renderer.domElement);
+const labelR = new THREE.CSS2DRenderer(); labelR.setSize(innerWidth,innerHeight); labelR.domElement.className='css2d'; sceneEl.appendChild(labelR.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 40000);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.08; controls.rotateSpeed=0.6; controls.zoomSpeed=0.9;
+
+{ const g=new THREE.BufferGeometry(), N=900, p=new Float32Array(N*3);
+  for(let i=0;i<N;i++){ const v=V(Math.random()-.5,Math.random()-.5,Math.random()-.5).normalize().multiplyScalar(MACHINE_D*(4+Math.random()*4)); p.set([v.x,v.y,v.z],i*3); }
+  g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x5a6b85,size:1.6,sizeAttenuation:false,transparent:true,opacity:.5}))); }
+
+function shellMat(color){
+  return new THREE.ShaderMaterial({
+    uniforms:{color:{value:new THREE.Color(color)},opacity:{value:0},base:{value:0.06}},
+    vertexShader:`varying vec3 vN; varying vec3 vV; void main(){ vec4 mv=modelViewMatrix*vec4(position,1.0); vN=normalize(normalMatrix*normal); vV=normalize(-mv.xyz); gl_Position=projectionMatrix*mv; }`,
+    fragmentShader:`uniform vec3 color; uniform float opacity; uniform float base; varying vec3 vN; varying vec3 vV;
+      void main(){ float f=pow(1.0-abs(dot(vN,vV)),2.6); gl_FragColor=vec4(color*(0.55+f), (base+f*0.9)*opacity); }`,
+    transparent:true, depthWrite:false, side:THREE.FrontSide, blending:THREE.AdditiveBlending
+  });
+}
+const sphereGeo = new THREE.SphereGeometry(1,48,32), smallGeo = new THREE.SphereGeometry(1,16,12);
+const fadeables = [];
+function fader(mat,uniform){ const f={mat,uniform,target:0}; fadeables.push(f); return f; }
+function makeLabel(html,cls,onClick){
+  const div=document.createElement('div'); div.className='lbl '+cls; div.innerHTML=html;
+  div.addEventListener('pointerdown',e=>e.stopPropagation());
+  div.addEventListener('click',e=>{e.stopPropagation(); onClick&&onClick();});
+  const o=new THREE.CSS2DObject(div); o.visible=false; scene.add(o); return o;
+}
+
+const OBJ = {machines:{},contours:{},elems:{}};
+for(const h of HOST_ORDER){
+  const T=TREE[h], m=new THREE.Mesh(sphereGeo, shellMat(hostColor(h)));
+  m.scale.setScalar(T.R); m.position.copy(T.pos); m.userData={type:'machine',h}; scene.add(m);
+  const bad=badCount(T.elems);
+  const lab=makeLabel(`${esc(hostOf(h).label)}<small>${plural(T.elems.length,'элемент','элемента','элементов')} · ${plural(T.order.length,'контур','контура','контуров')}${bad?` · <span class="bad">проблем: ${bad}</span>`:''}</small>`,'lbl-machine',()=>goMachine(h));
+  lab.position.copy(T.pos).add(V(0,T.R+6,0));
+  OBJ.machines[h]={mesh:m,fade:fader(m.material,'opacity'),label:lab};
+  for(const g of T.order){
+    const C=T.contours[g], cm=new THREE.Mesh(sphereGeo, shellMat(groupColor(g)));
+    cm.scale.setScalar(C.R); cm.position.copy(C.pos); cm.userData={type:'contour',h,g}; scene.add(cm);
+    const cb=badCount(C.elems);
+    const cl=makeLabel(`<span class="dot" style="background:${groupColor(g)}"></span>${esc(groupLabel(g))}<span class="n">${C.elems.length}</span>${cb?`<span class="bad">● ${cb}</span>`:''}`,'lbl-contour',()=>goContour(h,g));
+    cl.position.copy(C.pos).add(V(0,C.R+1.5,0));
+    OBJ.contours[h+'|'+g]={mesh:cm,fade:fader(cm.material,'opacity'),label:cl,C};
+    for(const n of C.elems){
+      const r = n.kind==='hub'?1.35:0.8;
+      const mat=new THREE.MeshBasicMaterial({color:new THREE.Color(groupColor(g)),transparent:true,opacity:0});
+      const em=new THREE.Mesh(smallGeo,mat); em.scale.setScalar(r); em.position.copy(n._pos); em.userData={type:'elem',id:n.id}; scene.add(em);
+      let halo=null;
+      if(BAD.has(n.status)){ const hm=new THREE.MeshBasicMaterial({color:new THREE.Color(css('--bad')),transparent:true,opacity:0,depthWrite:false,blending:THREE.AdditiveBlending});
+        halo=new THREE.Mesh(smallGeo,hm); halo.scale.setScalar(r*2.2); halo.position.copy(n._pos); scene.add(halo); }
+      const el=makeLabel('','lbl-el',()=>selectElem(n.id));
+      el.position.copy(n._pos); el.element.title=n.name;
+      OBJ.elems[n.id]={mesh:em,fade:fader(mat,null),halo,haloFade:halo?fader(halo.material,null):null,label:el,n,h,g};
+    }
+  }
+}
+
+function aggregate(keyFn){
+  const m=new Map();
+  for(const l of DATA.links){ if(l.soft) continue; const a=byId.get(l.source), b=byId.get(l.target); const k=keyFn(a,b); if(!k) continue;
+    if(!m.has(k.key)) m.set(k.key,{...k,links:[]}); m.get(k.key).links.push(l); }
+  return [...m.values()];
+}
+const MM = aggregate((a,b)=>{ if(a.host===b.host) return null; const [x,y]=[a.host,b.host].sort((p,q)=>HOST_ORDER.indexOf(p)-HOST_ORDER.indexOf(q)); return {key:x+'|'+y,a:x,b:y}; })
+  .sort((a,b)=>b.links.length-a.links.length);
+function viaSummary(links,k=4){ const c={}; links.forEach(l=>{const v=(l.via||'').split(/[;,(]/)[0].trim(); if(v) c[v]=(c[v]||0)+1}); return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,k).map(x=>x[0]); }
+
+const linkGroup = new THREE.Group(); scene.add(linkGroup);
+let linkLabels=[], particles=[];
+function clearLinks(){ while(linkGroup.children.length){const c=linkGroup.children.pop(); if(c.geometry!==pGeo) c.geometry?.dispose(); c.material?.dispose();} linkLabels.forEach(o=>{scene.remove(o); o.element.remove();}); linkLabels=[]; particles=[]; }
+function tube(a,b,radius,color,opacity){
+  const d=b.clone().sub(a), len=d.length(); if(len<0.01) return;
+  const g=new THREE.CylinderGeometry(radius,radius,len,10,1,true);
+  const m=new THREE.MeshBasicMaterial({color:new THREE.Color(color),transparent:true,opacity,depthWrite:false,blending:THREE.AdditiveBlending});
+  const mesh=new THREE.Mesh(g,m); mesh.position.copy(a).add(b).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(V(0,1,0),d.normalize()); linkGroup.add(mesh); return mesh;
+}
+function lines(segs){
+  if(!segs.length) return;
+  const pos=new Float32Array(segs.length*6), col=new Float32Array(segs.length*6);
+  segs.forEach((s,i)=>{ pos.set([s.a.x,s.a.y,s.a.z,s.b.x,s.b.y,s.b.z],i*6); const c=new THREE.Color(s.color).multiplyScalar(s.alpha); col.set([c.r,c.g,c.b,c.r,c.g,c.b],i*6); });
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('color',new THREE.BufferAttribute(col,3));
+  linkGroup.add(new THREE.LineSegments(g,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false})));
+}
+const pGeo=new THREE.SphereGeometry(1,8,6);
+function addParticles(a,b,color,n=2,size=0.35){ for(let i=0;i<n;i++){ const m=new THREE.Mesh(pGeo,new THREE.MeshBasicMaterial({color:new THREE.Color(color),transparent:true,opacity:.95}));
+  m.scale.setScalar(size); linkGroup.add(m); particles.push({m,a:a.clone(),b:b.clone(),t:i/n,speed:0.3/Math.max(1,a.distanceTo(b)/40)}); } }
+function linkLabel(pos,html,onClick){ const o=makeLabel(html,'lbl-link',onClick); o.position.copy(pos); o.visible=true; linkLabels.push(o); return o; }
+
+/* ---------- state + navigation ---------- */
+const S = {level:0,h:null,g:null,sel:null};
+const centerOf = () => S.level===0? V(0,0,0) : S.level===1? TREE[S.h].pos.clone() : TREE[S.h].contours[S.g].pos.clone();
+const radiusOf = () => S.level===0? MACHINE_D*1.5 : S.level===1? TREE[S.h].R : TREE[S.h].contours[S.g].R*0.98;
+
+let fly=null;
+function flyTo(center,radius,ms=1100){
+  const narrow=innerWidth<760, panelOpen=!document.getElementById('drawer').classList.contains('closed');
+  const dist = radius/Math.sin(THREE.MathUtils.degToRad(camera.fov/2))*(narrow?1.35:1.08);
+  let dir = camera.position.clone().sub(controls.target); if(dir.length()<0.001) dir=V(0.25,0.35,1); dir.normalize();
+  if(S.level===0) dir=V(0.08,0.3,1).normalize(); else if(ms>0&&!S._keepDir) dir=V(0.04,0.1,1).normalize();
+  // offset the look-at point so the target sits in the free area left of the panel
+  const right=new THREE.Vector3().crossVectors(dir.clone().negate(),camera.up).normalize();
+  const shift = (!narrow&&panelOpen)? right.multiplyScalar(dist*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*camera.aspect*(215/innerWidth)*2) : V(0,0,0);
+  const look=center.clone().add(shift);
+  fly={t0:performance.now(),ms,fromP:camera.position.clone(),toP:look.clone().add(dir.multiplyScalar(dist)),fromT:controls.target.clone(),toT:look};
+  controls.minDistance=radius*0.2; controls.maxDistance=MACHINE_D*14;
+}
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+
+function goWorld(){ S.level=0;S.h=null;S.g=null;S.sel=null; apply(); flyTo(centerOf(),radiusOf()); }
+function goMachine(h){ S.level=1;S.h=h;S.g=null;S.sel=null; apply(); flyTo(centerOf(),radiusOf()); }
+function goContour(h,g,keepSel){ const same=S.level===2&&S.h===h&&S.g===g; S.level=2;S.h=h;S.g=g; if(!keepSel) S.sel=null; apply(); if(!same) flyTo(centerOf(),radiusOf()); }
+function selectElem(id){ const o=OBJ.elems[id]; if(!o) return; S.sel=id; if(S.level!==2||S.h!==o.h||S.g!==o.g) goContour(o.h,o.g,true); else apply(); openDrawer(); }
+function goUp(){ if(S.sel){S.sel=null;apply();return} if(S.level===2) goMachine(S.h); else if(S.level===1) goWorld(); }
+
+function apply(){
+  const {level,h,g,sel}=S;
+  for(const [mh,o] of Object.entries(OBJ.machines)){
+    o.fade.target = level===0?1 : (mh===h?0.15:0.55);
+    o.mesh.material.uniforms.base.value = level===0?0.07:0.02;
+    o.label.visible = level===0 || mh!==h;
+  }
+  for(const [k,o] of Object.entries(OBJ.contours)){
+    const [ch,cg]=k.split('|'), inM=ch===h;
+    o.fade.target = level===0?0.22 : inM ? (level===1?1:(cg===g?0.22:0.5)) : 0.1;
+    o.label.visible = inM && (level===1 || (level===2&&cg!==g));
+    o.label.element.classList.toggle('dim', level===2);
+  }
+  const hl=new Set();
+  if(sel){ hl.add(sel); outL.get(sel).forEach(l=>hl.add(l.target)); inL.get(sel).forEach(l=>hl.add(l.source)); }
+  for(const [id,o] of Object.entries(OBJ.elems)){
+    const inC = level===2&&o.h===h&&o.g===g, inM = level>=1&&o.h===h;
+    o.fade.target = sel ? (hl.has(id)?1:(inC?0.3:0.07)) : inC?1 : inM?(level===1?0.85:0.3) : level===0?0.75:0.18;
+    if(o.haloFade) o.haloFade.target = (inC||(level===1&&inM))?0.35:(level===0?0.25:0.06);
+    o.label.visible = (inC && !sel) || (sel && hl.has(id));
+    const outside = sel && hl.has(id) && !inC;
+    o.label.element.classList.toggle('sel', id===sel);
+    o.label.element.innerHTML = `<span class="dot" style="background:${statusColor(statusOf(o.n))}"></span><span class="t">${esc(shortName(o.n))}</span>${outside?`<span class="where">${esc(o.h===h?groupLabel(o.g):hostShort(o.h)+' · '+groupLabel(o.g))}</span>`:''}`;
+  }
+  clearLinks();
+  if(level===0){
+    for(const e of MM){ const A=TREE[e.a].pos, B=TREE[e.b].pos, dir=B.clone().sub(A).normalize();
+      const a=A.clone().add(dir.clone().multiplyScalar(TREE[e.a].R)), b=B.clone().sub(dir.clone().multiplyScalar(TREE[e.b].R));
+      tube(a,b,0.6+Math.log2(e.links.length)*0.55,'#7fa6e0',0.3); addParticles(a,b,'#cfe0ff',3,1.4); addParticles(b,a,'#cfe0ff',1,1.1);
+      const LT={'vps|cloud':0.7,'laptop|cloud':0.72,'laptop|homelab':0.42,'vps|homelab':0.42,'homelab|cloud':0.28}; linkLabel(a.clone().lerp(b,LT[e.key]??0.5),`${plural(e.links.length,'связь','связи','связей')} · ${esc(viaSummary(e.links,3).join(', '))}`,()=>showLinks(`${hostOf(e.a).label} ↔ ${hostOf(e.b).label}`,e.links));
+    }
+  } else if(level===1){
+    const T=TREE[h];
+    const agg=aggregate((a,b)=>{ if(a.kind==='machine'||b.kind==='machine') return null; if(a.host!==h&&b.host!==h) return null;
+      const ka = a.host===h? 'c:'+a.group : 'm:'+a.host, kb = b.host===h? 'c:'+b.group : 'm:'+b.host; if(ka===kb) return null;
+      const [x,y]=[ka,kb].sort(); return {key:x+'|'+y,x,y}; });
+    const P=k=>k[0]==='c'?T.contours[k.slice(2)].pos:TREE[k.slice(2)].pos, Rr=k=>k[0]==='c'?T.contours[k.slice(2)].R:TREE[k.slice(2)].R;
+    for(const e of agg){ const A=P(e.x),B=P(e.y),dir=B.clone().sub(A).normalize();
+      const a=A.clone().add(dir.clone().multiplyScalar(Rr(e.x))), b=B.clone().sub(dir.clone().multiplyScalar(Rr(e.y)));
+      const ext = e.x[0]==='m'||e.y[0]==='m';
+      tube(a,b,(ext?0.08:0.15)+Math.log2(e.links.length+1)*(ext?0.08:0.17), ext?'#5d7aa6':'#8fb3ea', ext?0.07:0.3);
+      if(!ext) addParticles(a,b,'#cfe0ff',1,0.45);
+    }
+  } else {
+    const segs=[];
+    for(const l of DATA.links){ const A=OBJ.elems[l.source],B=OBJ.elems[l.target]; if(!A||!B) continue;
+      const aIn=A.h===h&&A.g===g, bIn=B.h===h&&B.g===g; if(!aIn&&!bIn) continue;
+      const isHl = sel && (l.source===sel||l.target===sel);
+      if(l.soft && !isHl) continue;
+      if(isHl){ segs.push({a:A.n._pos,b:B.n._pos,color:'#ffffff',alpha:0.95}); addParticles(A.n._pos,B.n._pos,'#ffffff',2,0.32); continue; }
+      if(sel){ segs.push({a:A.n._pos,b:B.n._pos,color:'#4d6587',alpha:aIn&&bIn?0.35:0.1}); continue; }
+      segs.push({a:A.n._pos,b:B.n._pos,color:aIn&&bIn?'#9cc0ff':'#6f8fbd',alpha:aIn&&bIn?0.75:0.09});
+    }
+    lines(segs);
+  }
+  renderCrumbs(); renderPanel(); setHint();
+}
+
+/* ---------- picking ---------- */
+const ray=new THREE.Raycaster(), mouse=new THREE.Vector2(); let hover=null, downAt=null;
+function pickables(){
+  const arr=[];
+  if(S.level===0) Object.values(OBJ.machines).forEach(o=>arr.push(o.mesh));
+  else {
+    Object.entries(OBJ.machines).forEach(([h,o])=>{ if(h!==S.h) arr.push(o.mesh) });
+    Object.entries(OBJ.contours).forEach(([k,o])=>{ const [h,g]=k.split('|'); if(h===S.h && !(S.level===2&&g===S.g)) arr.push(o.mesh) });
+    if(S.level===2) Object.values(OBJ.elems).forEach(o=>{ if((o.h===S.h&&o.g===S.g) || (S.sel&&o.label.visible)) arr.push(o.mesh) });
+  }
+  return arr;
+}
+function pickAt(e){
+  const r=renderer.domElement.getBoundingClientRect(); mouse.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);
+  ray.setFromCamera(mouse,camera); const objs=pickables();
+  const els=objs.filter(o=>o.userData.type==='elem');
+  let best=null,bd=16; for(const o of els){ const p=o.position.clone().project(camera); if(p.z>1) continue;
+    const d=Math.hypot((p.x-mouse.x)*r.width/2,(p.y-mouse.y)*r.height/2); if(d<bd){bd=d;best=o} }
+  if(best) return best;
+  const hit=ray.intersectObjects(objs.filter(o=>o.userData.type!=='elem'),false)[0]; return hit?hit.object:null;
+}
+renderer.domElement.addEventListener('pointerdown',e=>{downAt=[e.clientX,e.clientY]});
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!downAt||Math.hypot(e.clientX-downAt[0],e.clientY-downAt[1])>5) return; downAt=null;
+  const o=pickAt(e); if(!o){ if(S.sel){S.sel=null;apply()} return; }
+  const u=o.userData; if(u.type==='machine') goMachine(u.h); else if(u.type==='contour') goContour(u.h,u.g); else if(u.type==='elem') selectElem(u.id);
+});
+renderer.domElement.addEventListener('dblclick',e=>{ if(!pickAt(e)) goUp(); });
+let hoverTick=0;
+renderer.domElement.addEventListener('pointermove',e=>{ if(e.buttons||performance.now()-hoverTick<40) return; hoverTick=performance.now();
+  hover=pickAt(e); renderer.domElement.style.cursor=hover?'pointer':'grab'; });
+
+/* ---------- render loop ---------- */
+const clock=new THREE.Clock(); let paused=false;
+function frame(){
+  requestAnimationFrame(frame); if(paused) return;
+  const dt=Math.min(clock.getDelta(),0.05);
+  if(fly){ const t=Math.min(1,(performance.now()-fly.t0)/fly.ms), k=ease(t);
+    camera.position.lerpVectors(fly.fromP,fly.toP,k); controls.target.lerpVectors(fly.fromT,fly.toT,k); if(t>=1) fly=null; }
+  controls.update();
+  for(const f of fadeables){ let tgt=f.target; const m=f.mat;
+    if(hover && hover.material===m) tgt = f.uniform? Math.min(1.7,tgt+0.7) : 1;
+    if(f.uniform){ const u=m.uniforms[f.uniform]; u.value+=(tgt-u.value)*0.12; } else { m.opacity+=(tgt-m.opacity)*0.12; m.visible=m.opacity>0.01; } }
+  for(const p of particles){ p.t=(p.t+dt*p.speed)%1; p.m.position.lerpVectors(p.a,p.b,p.t); }
+  renderer.render(scene,camera); labelR.render(scene,camera);
+}
+
+/* ---------- breadcrumbs, hint, panel ---------- */
+function renderCrumbs(){
+  const c=[`<button data-c="w">Вся система</button>`];
+  if(S.level>=1) c.push(`<span class="sep">›</span><button data-c="m">${esc(hostOf(S.h).label)}</button>`);
+  if(S.level>=2) c.push(`<span class="sep">›</span><button data-c="g">${esc(groupLabel(S.g))}</button>`);
+  if(S.sel) c.push(`<span class="sep">›</span><button data-c="s">${esc(byId.get(S.sel).name)}</button>`);
+  const el=document.getElementById('crumbs'); el.innerHTML=c.join('');
+  el.querySelectorAll('button').forEach(b=>b.onclick=()=>{const k=b.dataset.c; if(k==='w')goWorld(); else if(k==='m')goMachine(S.h); else if(k==='g'){S.sel=null;apply();} });
+}
+function setHint(){
+  document.getElementById('hint').textContent =
+    S.level===0 ? 'Нажми на шар машины, чтобы войти внутрь · перетаскивание вращает · колесо приближает'
+    : S.level===1 ? 'Шары внутри — контуры. Нажми на контур · Esc или двойной клик по пустому — назад'
+    : S.sel ? 'Белые линии — связи элемента, частицы идут по направлению потока · клик по пустому снимает выделение'
+    : 'Нажми на элемент, чтобы увидеть описание и все его связи · Esc — назад';
+}
+function statusBar(arr){
+  const c={}; arr.forEach(n=>{const s=statusOf(n); c[s]=(c[s]||0)+1});
+  const ks=Object.keys(STATUS).filter(s=>c[s]);
+  return `<div class="bars">${ks.map(s=>`<span style="flex:${c[s]};background:${statusColor(s)}" title="${STATUS[s].label}: ${c[s]}"></span>`).join('')}</div>
+    <div class="note">${ks.map(s=>`${STATUS[s].label} ${c[s]}`).join(' · ')}</div>`;
+}
+function elemRow(n,extra){ return `<div class="row" data-el="${esc(n.id)}" tabindex="0"><span class="dot" style="background:${statusColor(statusOf(n))}"></span><span class="t">${esc(n.name)}</span><span class="n">${extra??esc(n.kind)}</span>${BAD.has(n.status)&&n.statusNote?`<span class="v">${esc(n.statusNote)}</span>`:''}</div>`; }
+function openDrawer(){ document.getElementById('drawer').classList.remove('closed'); document.getElementById('openPanel').hidden=true; }
+function panel(html){ const d=document.getElementById('drawer'); d.innerHTML=`<button class="close" id="dClose" aria-label="Свернуть панель">×</button>`+html; d.scrollTop=0;
+  document.getElementById('dClose').onclick=()=>{d.classList.add('closed');document.getElementById('openPanel').hidden=false};
+  d.querySelectorAll('[data-el]').forEach(e=>{const go=()=>(mode==='overview'?selectElem(e.dataset.el):gSelect(e.dataset.el,true));e.onclick=go;e.onkeydown=k=>{if(k.key==='Enter')go()}});
+  d.querySelectorAll('[data-m]').forEach(e=>e.onclick=()=>goMachine(e.dataset.m));
+  d.querySelectorAll('[data-g]').forEach(e=>e.onclick=()=>goContour(S.h,e.dataset.g));
+  d.querySelectorAll('[data-mm]').forEach(e=>e.onclick=()=>{const x=MM.find(m=>m.key===e.dataset.mm); showLinks(`${hostOf(x.a).label} ↔ ${hostOf(x.b).label}`,x.links)});
+  d.querySelectorAll('[data-up]').forEach(e=>e.onclick=()=>goUp());
+}
+function mmRow(e,from){ const o=from?(e.a===from?e.b:e.a):null;
+  return `<div class="row" data-mm="${e.key}"><span class="dot" style="background:${o?hostColor(o):`linear-gradient(90deg,${hostColor(e.a)} 50%,${hostColor(e.b)} 50%)`}"></span><span class="t">${o?esc(hostOf(o).label):esc(hostShort(e.a))+' ↔ '+esc(hostShort(e.b))}</span><span class="n">${e.links.length}</span><span class="v">${esc(viaSummary(e.links,5).join(' · '))}</span></div>`; }
+function renderPanel(){
+  if(mode!=='overview') return;
+  const {level,h,g,sel}=S;
+  if(sel) return panel(dossier(byId.get(sel),true));
+  if(level===0){
+    return panel(`<div class="eyebrow">Обзор</div><h2>Вся система</h2>
+      <p class="note">Четыре шара — четыре места, где что-то работает. Внутри каждого шара лежат контуры — группы по смыслу. Внутри контура — отдельные сервисы, боты, таймеры и базы. Трубки между шарами — связи, частицы показывают направление потока.</p>
+      ${statusBar(ELEMS)}
+      <section><h4>Машины</h4>${HOST_ORDER.map(x=>{const T=TREE[x],b=badCount(T.elems);return `<div class="row" data-m="${x}"><span class="dot" style="background:${hostColor(x)}"></span><span class="t">${esc(MACHINE[x]?.name||hostOf(x).label)}</span><span class="n">${T.elems.length}${b?` · <b>${b}</b>`:''}</span><span class="v">${esc((MACHINE[x]?.purpose||'').split('. ')[0])}</span></div>`}).join('')}</section>
+      <section><h4>Как машины связаны между собой</h4>${MM.map(e=>mmRow(e)).join('')}</section>`);
+  }
+  if(level===1){
+    const T=TREE[h], M=MACHINE[h]||{}, bad=T.elems.filter(n=>BAD.has(n.status));
+    return panel(`<button class="back" data-up>← Вся система</button><div class="eyebrow"><span class="dot" style="background:${hostColor(h)}"></span>Машина</div><h2>${esc(M.name||hostOf(h).label)}</h2>
+      ${statusBar(T.elems)}
+      ${M.purpose?`<section><h4>Что это</h4><p>${esc(M.purpose)}</p></section>`:''}
+      ${M.how?`<section><h4>Как устроено</h4><p>${esc(M.how)}</p></section>`:''}
+      <section><h4>Контуры на этой машине · ${T.order.length}</h4>${T.order.map(x=>{const C=T.contours[x],b=badCount(C.elems);return `<div class="row" data-g="${esc(x)}"><span class="dot" style="background:${groupColor(x)}"></span><span class="t">${esc(groupLabel(x))}</span><span class="n">${C.elems.length}${b?` · <b>${b}</b>`:''}</span></div>`}).join('')}</section>
+      <section><h4>Связи с другими машинами</h4>${MM.filter(e=>e.a===h||e.b===h).map(e=>mmRow(e,h)).join('')}</section>
+      ${bad.length?`<section><h4>Проблемы здесь · ${bad.length}</h4>${bad.map(n=>elemRow(n,esc(groupLabel(n.group)))).join('')}</section>`:''}
+      ${M.tech?`<section><h4>Техника</h4><div class="tech">${esc(M.tech)}</div></section>`:''}`);
+  }
+  const C=TREE[h].contours[g];
+  const out={}; C.elems.forEach(n=>[...outL.get(n.id),...inL.get(n.id)].forEach(l=>{ if(l.soft) return; const o=byId.get(l.source===n.id?l.target:l.source); if(o.host===h&&o.group===g) return; const k=o.host===h?groupLabel(o.group):hostShort(o.host)+' · '+groupLabel(o.group); out[k]=(out[k]||0)+1; }));
+  const els=[...C.elems].sort((a,b)=>(BAD.has(b.status)-BAD.has(a.status))||b.deg-a.deg);
+  panel(`<button class="back" data-up>← ${esc(hostOf(h).label)}</button><div class="eyebrow"><span class="dot" style="background:${groupColor(g)}"></span>Контур · ${esc(hostOf(h).label)}</div><h2>${esc(groupLabel(g))}</h2>
+    ${statusBar(C.elems)}
+    <section><h4>Что это за контур</h4><p>${esc(GROUP_INFO[g]||'')}</p></section>
+    <section><h4>Элементы · ${C.elems.length}</h4>${els.map(n=>elemRow(n, plural(n.deg,'связь','связи','связей'))).join('')}</section>
+    ${Object.keys(out).length?`<section><h4>С чем связан контур</h4>${Object.entries(out).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="row" style="cursor:default"><span class="dot" style="background:var(--faint)"></span><span class="t">${esc(k)}</span><span class="n">${v}</span></div>`).join('')}</section>`:''}`);
+}
+function linkRow(l,dir){
+  const other=byId.get(dir==='out'?l.target:l.source);
+  return `<div class="row" data-el="${esc(other.id)}" tabindex="0"><span class="dot" style="background:${hostColor(other.host)}"></span><span class="t">${dir==='out'?'→ ':'← '}${esc(other.name)}</span><span class="n">${esc(hostShort(other.host))}</span><span class="v"><i>${esc(l.via||'')}</i>${l.what?' — '+esc(l.what):''}</span></div>`;
+}
+function dossier(n,withBack){
+  const st=STATUS[statusOf(n)], o=outL.get(n.id), i=inL.get(n.id);
+  return `${withBack?`<button class="back" data-up>← ${esc(groupLabel(n.group))}</button>`:''}
+    <div class="eyebrow"><span class="dot" style="background:${groupColor(n.group)}"></span>${esc(groupLabel(n.group))} · ${esc(hostOf(n.host).label)}</div>
+    <h2>${esc(n.name)}</h2><div class="id">${esc(n.id)}</div>
+    <div class="pills"><span class="pill st-${statusOf(n)}"><span class="dot" style="background:${statusColor(statusOf(n))}"></span>${esc(st.label)}</span><span class="pill">${esc(n.kind)}</span></div>
+    ${n.statusNote?`<p class="note">${esc(n.statusNote)}</p>`:''}
+    ${n.purpose?`<section><h4>Зачем создано</h4><p>${esc(n.purpose)}</p></section>`:''}
+    ${n.how?`<section><h4>Как работает</h4><p>${esc(n.how)}</p></section>`:''}
+    ${n.tech?`<section><h4>Техника</h4><div class="tech">${esc(n.tech)}</div></section>`:''}
+    ${o.length?`<section><h4>Обращается к · ${o.length}</h4>${o.map(l=>linkRow(l,'out')).join('')}</section>`:''}
+    ${i.length?`<section><h4>Обращаются к нему · ${i.length}</h4>${i.map(l=>linkRow(l,'in')).join('')}</section>`:''}`;
+}
+
+/* ---------- modal ---------- */
+const modal=document.getElementById('modal');
+function openModal(html){ document.getElementById('modalBox').innerHTML=html; modal.hidden=false;
+  modal.querySelectorAll('[data-el]').forEach(e=>e.onclick=()=>{modal.hidden=true; mode==='overview'?selectElem(e.dataset.el):gSelect(e.dataset.el,true)}); }
+function showLinks(title,links){
+  openModal(`<h2>${esc(title)} · ${links.length}</h2>`+links.map(l=>{const a=byId.get(l.source),b=byId.get(l.target);
+    return `<div class="row" data-el="${esc(a.id)}"><span class="dot" style="background:${hostColor(a.host)}"></span><span class="t">${esc(a.name)} → ${esc(b.name)}</span><span class="n">${esc(hostShort(a.host))} → ${esc(hostShort(b.host))}</span><span class="v"><i>${esc(l.via||'')}</i>${l.what?' — '+esc(l.what):''}</span></div>`}).join(''));
+}
+document.getElementById('probBtn').onclick=()=>{
+  const bad=DATA.nodes.filter(n=>BAD.has(n.status));
+  openModal(`<h2>Что сейчас не работает · ${bad.length}</h2>`+bad.map(n=>`<div class="row" data-el="${esc(n.id)}"><span class="dot" style="background:${statusColor(n.status)}"></span><span class="t">${esc(n.name)}</span><span class="n">${esc(hostShort(n.host))}</span><span class="v">${esc(n.statusNote||STATUS[n.status].label)}</span></div>`).join('')
+    +(DATA.problems?.length?`<h2 style="margin-top:20px">Найдено при разборе</h2>${DATA.problems.map(p=>`<p style="margin:0 0 9px;max-width:65ch">${esc(p)}</p>`).join('')}`:''));
+};
+modal.onclick=e=>{if(e.target===modal)modal.hidden=true};
+document.getElementById('openPanel').onclick=openDrawer;
+
+/* ---------- search ---------- */
+const q=document.getElementById('q'), res=document.getElementById('res'); let hits=[],act=0;
+const norm=s=>String(s||'').toLowerCase().replace(/ё/g,'е');
+q.oninput=()=>{const t=norm(q.value).trim(); if(!t){res.hidden=true;return}
+  hits=ELEMS.map(n=>{const nm=norm(n.name),id=norm(n.id);let sc=nm.startsWith(t)?0:nm.includes(t)?1:id.includes(t)?2:(norm(n.tech).includes(t)||norm(n.purpose).includes(t))?3:9;return[sc,n]})
+    .filter(x=>x[0]<9).sort((a,b)=>a[0]-b[0]||b[1].deg-a[1].deg).slice(0,14).map(x=>x[1]); act=0; drawRes();};
+function drawRes(){res.hidden=!hits.length;res.innerHTML=hits.map((n,i)=>`<div data-i="${i}" class="${i===act?'act':''}"><span class="dot" style="background:${groupColor(n.group)}"></span>${esc(n.name)}<span style="margin-left:auto;font:11px var(--f-mono);color:var(--faint);white-space:nowrap">${esc(hostShort(n.host))} · ${esc(groupLabel(n.group))}</span></div>`).join('');
+  res.querySelectorAll('div').forEach(d=>d.onmousedown=e=>{e.preventDefault();pick(+d.dataset.i)});}
+function pick(i){const n=hits[i];if(!n)return;res.hidden=true;q.value='';q.blur(); mode==='overview'?selectElem(n.id):gSelect(n.id,true)}
+q.onkeydown=e=>{if(e.key==='ArrowDown'){act=Math.min(act+1,hits.length-1);drawRes()}else if(e.key==='ArrowUp'){act=Math.max(act-1,0);drawRes()}else if(e.key==='Enter')pick(act);else if(e.key==='Escape'){res.hidden=true;q.blur()}};
+q.onblur=()=>setTimeout(()=>res.hidden=true,150);
+document.addEventListener('keydown',e=>{ if(document.activeElement===q) return;
+  if(e.key==='Escape'){ if(!modal.hidden){modal.hidden=true;return} mode==='overview'?goUp():gSelect(null); }
+  if(e.key==='/'){e.preventDefault();q.focus()} });
+
+/* ================= graph tab (all links at once) ================= */
+let mode='overview', gmode='3d', gsel=null, ghl=new Set(), ghlLinks=new Set(), G3=null, G2=null;
+const gel=document.getElementById('graph');
+const filt={host:new Set(Object.keys(HOSTS)),status:new Set(Object.keys(STATUS)),group:new Set(Object.keys(GROUPS))};
+const linkKey = l => (l.source.id||l.source)+'>'+(l.target.id||l.target);
+const gNodeColor = n => (gsel && !ghl.has(n.id)) ? '#2a3647' : hostColor(n.host);
+const gSize = n => (n.kind==='machine'?14:n.kind==='hub'?7:2.4) + Math.min(n.deg,24)*0.28;
+const tipHtml = n => `<div class="tip"><b>${esc(n.name)}</b><small>${esc(hostOf(n.host).label)} · ${esc(groupLabel(n.group))} · ${esc(STATUS[statusOf(n)].label)}</small></div>`;
+function gVisible(){
+  const nodes=DATA.nodes.filter(n=>filt.host.has(n.host)&&filt.status.has(statusOf(n))&&(filt.group.has(n.group)||!GROUPS[n.group]));
+  const ids=new Set(nodes.map(n=>n.id));
+  return {nodes,links:DATA.links.filter(l=>ids.has(l.source.id||l.source)&&ids.has(l.target.id||l.target))};
+}
+function hostForce(strength){ let nodes; const sc=()=>gmode==='3d'?1:1.35;
+  function f(alpha){ for(const n of nodes){ const a=hostOf(n.host).pos, k=strength*alpha; n.vx+=(a[0]*sc()-n.x)*k; n.vy+=(a[1]*sc()-n.y)*k; if(gmode==='3d'&&n.z!==undefined) n.vz+=(a[2]-n.z)*k; } }
+  f.initialize=ns=>nodes=ns; return f; }
+function pinMachines(){ const k=gmode==='3d'?0.6:1.35; DATA.nodes.forEach(n=>{ if(n.kind==='machine'){ const a=hostOf(n.host).pos; n.fx=a[0]*k; n.fy=a[1]*k; if(gmode==='3d') n.fz=a[2]; } }) }
+function build3d(){ gel.innerHTML=''; pinMachines();
+  G3 = ForceGraph3D({controlType:'orbit'})(gel).backgroundColor(css('--bg')).showNavInfo(false).graphData(gVisible())
+    .nodeId('id').nodeLabel(tipHtml).nodeVal(n=>gSize(n)**1.5/3).nodeRelSize(3).nodeOpacity(.95).nodeResolution(14).nodeColor(gNodeColor)
+    .linkVisibility(l=>!l.soft||ghlLinks.has(linkKey(l)))
+    .linkColor(l=> ghlLinks.has(linkKey(l)) ? '#cfe0ff' : (gsel?'#1b2534':'#2e425e')).linkWidth(l=> ghlLinks.has(linkKey(l))?1.6:0.4).linkOpacity(.55)
+    .linkDirectionalParticles(l=> ghlLinks.has(linkKey(l))?3:(gsel?0:1)).linkDirectionalParticleWidth(l=> ghlLinks.has(linkKey(l))?2.6:1.2).linkDirectionalParticleSpeed(.006)
+    .linkDirectionalParticleColor(l=> ghlLinks.has(linkKey(l))?'#ffffff':'#4f6c95')
+    .linkLabel(l=>`<div class="tip">${esc(l.via||'')}<small>${esc(l.what||'')}</small></div>`)
+    .onNodeClick(n=>gSelect(n.id,true)).onBackgroundClick(()=>gSelect(null));
+  G3.d3Force('host',hostForce(.3)); G3.d3Force('charge').strength(-30); G3.d3Force('link').distance(l=>((l.source.host===l.target.host)?28:120)).strength(l=>l.source.host===l.target.host?0.5:0.05);
+  G3.cameraPosition({x:0,y:0,z:900}); }
+function build2d(){ gel.innerHTML=''; pinMachines();
+  G2 = ForceGraph()(gel).backgroundColor(css('--bg')).graphData(gVisible()).nodeId('id').nodeLabel(tipHtml)
+    .nodeCanvasObject((n,ctx,s)=>{ const r=gSize(n)*0.9, dim=gsel&&!ghl.has(n.id);
+      ctx.beginPath();ctx.arc(n.x,n.y,r,0,2*Math.PI);ctx.fillStyle=gNodeColor(n);ctx.fill();
+      if(!dim && n.kind!=='machine'){ctx.lineWidth=2.1/s;ctx.strokeStyle=statusColor(statusOf(n));ctx.stroke();}
+      const show=(n.kind==='machine'&&s>1.4)||(n.kind==='hub'&&s>0.9)||s>2.4||(gsel&&ghl.has(n.id)&&(s>1.2||n.id===gsel));
+      if(show&&!dim){const fs=(n.kind==='machine'?16:11)/s*(s>1.6?1:1.2);ctx.font=`${n.kind==='machine'?600:400} ${fs}px Golos Text, sans-serif`;
+        ctx.textAlign='center';ctx.textBaseline='top';ctx.fillStyle=n.kind==='machine'?'#fff':'#c7d3e3';ctx.fillText(n.name,n.x,n.y+r+2/s);} })
+    .nodePointerAreaPaint((n,c,ctx)=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(n.x,n.y,gSize(n)*0.9+2,0,2*Math.PI);ctx.fill();})
+    .linkVisibility(l=>!l.soft||ghlLinks.has(linkKey(l)))
+    .linkColor(l=> ghlLinks.has(linkKey(l)) ? '#cfe0ff' : (gsel?'#1a2332':'#2b3d57')).linkWidth(l=> ghlLinks.has(linkKey(l))?1.8:0.6)
+    .linkDirectionalArrowLength(l=>ghlLinks.has(linkKey(l))?5:2.5).linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles(l=> ghlLinks.has(linkKey(l))?3:0).linkDirectionalParticleWidth(2.4).linkDirectionalParticleColor(()=>'#fff')
+    .linkLabel(l=>`<div class="tip">${esc(l.via||'')}<small>${esc(l.what||'')}</small></div>`)
+    .onNodeClick(n=>gSelect(n.id,true)).onBackgroundClick(()=>gSelect(null))
+    .onRenderFramePre((ctx,s)=>{ const gg={}; for(const n of G2.graphData().nodes){ if(n.x==null) continue; (gg[n.host]??=[]).push(n) }
+      for(const [h,ns] of Object.entries(gg)){ if(ns.length<2) continue; let cx=0,cy=0; ns.forEach(n=>{cx+=n.x;cy+=n.y}); cx/=ns.length; cy/=ns.length;
+        const ds=ns.map(n=>Math.hypot(n.x-cx,n.y-cy)).sort((a,b)=>a-b); const r=ds[Math.floor(ds.length*0.82)]+24;
+        const c=hostColor(h); ctx.beginPath(); ctx.arc(cx,cy,r,0,2*Math.PI); ctx.fillStyle=c+'0d'; ctx.fill(); ctx.lineWidth=1/s; ctx.setLineDash([6/s,6/s]); ctx.strokeStyle=c+'55'; ctx.stroke(); ctx.setLineDash([]);
+        ctx.font=`600 ${14/s}px Unbounded, sans-serif`; ctx.fillStyle=c+'aa'; ctx.textAlign='center'; ctx.textBaseline='bottom'; ctx.fillText(hostOf(h).label.toUpperCase(),cx,cy-r-4/s); } });
+  G2.d3Force('host',hostForce(.16)); G2.d3Force('charge').strength(-38); G2.d3Force('link').distance(l=>((l.source.host===l.target.host)?22:110)).strength(l=>l.source.host===l.target.host?0.5:0.04);
+  setTimeout(()=>G2&&G2.zoomToFit(600,60),1500); }
+const G=()=>gmode==='3d'?G3:G2;
+function gRefresh(){ const g=G(); if(!g) return; if(gmode==='3d') g.nodeColor(g.nodeColor()).linkVisibility(g.linkVisibility()).linkColor(g.linkColor()).linkWidth(g.linkWidth()).linkDirectionalParticles(g.linkDirectionalParticles()); }
+function gSelect(id,flyTo){
+  gsel=id;
+  if(!id){ghl=new Set();ghlLinks=new Set();gRefresh(); panel(`<div class="eyebrow">Граф связей</div><h2>Все связи сразу</h2><p class="note">Все узлы в одном пространстве, сгруппированы по машинам. Этот режим нужен, чтобы проследить цепочку через несколько машин. Нажми на узел, чтобы подсветить его связи; слева фильтры.</p>`); return}
+  ghl=new Set([id]); ghlLinks=new Set();
+  outL.get(id).forEach(l=>{ghlLinks.add(l.source+'>'+l.target);ghl.add(l.target)}); inL.get(id).forEach(l=>{ghlLinks.add(l.source+'>'+l.target);ghl.add(l.source)});
+  panel(dossier(byId.get(id),false)); openDrawer(); gRefresh();
+  if(flyTo){ const gn=G()?.graphData().nodes.find(x=>x.id===id); if(gn&&gn.x!=null){
+    if(gmode==='3d'){ const r=1+160/Math.hypot(gn.x,gn.y,gn.z||1); G3.cameraPosition({x:gn.x*r,y:gn.y*r,z:(gn.z||1)*r},gn,900);} else {G2.centerAt(gn.x,gn.y,700);G2.zoom(2.6,700);} } }
+}
+function countBy(key){const m={};DATA.nodes.forEach(n=>{const v=key==='status'?statusOf(n):n[key];m[v]=(m[v]||0)+1});return m}
+function renderFilters(){
+  const ch=countBy('host'), cs=countBy('status'), cg=countBy('group');
+  document.getElementById('fHost').innerHTML=Object.entries(HOSTS).filter(([k])=>ch[k]).map(([k,v])=>`<label><input type="checkbox" data-f="host" value="${k}" ${filt.host.has(k)?'checked':''}><span class="dot" style="background:${hostColor(k)}"></span>${esc(v.label)}<span class="n">${ch[k]}</span></label>`).join('');
+  document.getElementById('fStatus').innerHTML=Object.entries(STATUS).filter(([k])=>cs[k]).map(([k,v])=>`<label><input type="checkbox" data-f="status" value="${k}" ${filt.status.has(k)?'checked':''}><span class="ring" style="border-color:${statusColor(k)}"></span>${esc(v.label)}<span class="n">${cs[k]}</span></label>`).join('');
+  document.getElementById('fGroup').innerHTML=Object.entries(GROUPS).filter(([k])=>cg[k]).map(([k,v])=>`<label><input type="checkbox" data-f="group" value="${k}" ${filt.group.has(k)?'checked':''}><span class="dot" style="background:${v.c}"></span>${esc(v.label)}<span class="n">${cg[k]}</span></label>`).join('');
+  document.querySelectorAll('#legend input[data-f]').forEach(i=>i.onchange=()=>{const s=filt[i.dataset.f];i.checked?s.add(i.value):s.delete(i.value);G()&&G().graphData(gVisible())});
+}
+function destroyGraph(){ [G3,G2].forEach(g=>{ if(g){ g.pauseAnimation&&g.pauseAnimation(); g._destructor&&g._destructor(); } }); G3=G2=null; gel.innerHTML='';
+  DATA.nodes.forEach(n=>{delete n.x;delete n.y;delete n.z;delete n.vx;delete n.vy;delete n.vz;delete n.fx;delete n.fy;delete n.fz});
+  DATA.links.forEach(l=>{if(typeof l.source==='object'){l.source=l.source.id;l.target=l.target.id}}); }
+function setGMode(m){ gmode=m; document.getElementById('m3').classList.toggle('on',m==='3d'); document.getElementById('m2').classList.toggle('on',m==='2d'); destroyGraph(); m==='3d'?build3d():build2d(); if(gsel) setTimeout(()=>gSelect(gsel,true),1800); }
+document.getElementById('m3').onclick=()=>gmode!=='3d'&&setGMode('3d');
+document.getElementById('m2').onclick=()=>gmode!=='2d'&&setGMode('2d');
+
+function setTab(t){
+  if(t===mode) return; mode=t; const ov=t==='overview';
+  document.getElementById('tabOverview').classList.toggle('on',ov); document.getElementById('tabGraph').classList.toggle('on',!ov);
+  sceneEl.hidden=!ov; gel.hidden=ov; document.getElementById('graphModes').hidden=ov; document.getElementById('legend').hidden=ov;
+  document.getElementById('crumbs').hidden=!ov; document.getElementById('hint').hidden=!ov; paused=!ov;
+  if(ov){ destroyGraph(); apply(); } else { renderFilters(); gmode==='3d'?build3d():build2d(); gSelect(null); }
+}
+document.getElementById('tabOverview').onclick=()=>setTab('overview');
+document.getElementById('tabGraph').onclick=()=>setTab('graph');
+
+addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); labelR.setSize(innerWidth,innerHeight); const g=G(); g&&g.width(innerWidth).height(innerHeight); });
+
+/* ---------- boot ---------- */
+camera.position.set(0, MACHINE_D*1.4, MACHINE_D*6); controls.target.set(0,0,0);
+apply(); flyTo(centerOf(),radiusOf(),1600); frame();
+{ const h0=location.hash.slice(1);
+  if(h0==='graph') setTab('graph');
+  else if(h0==='graph2d'){ gmode='2d'; document.getElementById('m2').classList.add('on'); document.getElementById('m3').classList.remove('on'); setTab('graph'); }
+  else if(TREE[h0]) setTimeout(()=>goMachine(h0),200);
+  else if(h0.includes('.')){ const [hh,gg]=h0.split('.'); if(TREE[hh]?.contours[gg]) setTimeout(()=>goContour(hh,gg),200); }
+  else if(byId.has(h0)) setTimeout(()=>selectElem(h0),200); }
+</script>
+</body>
+</html>

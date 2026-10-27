@@ -1,0 +1,762 @@
+{
+ "snapshot": "демо",
+ "hostOrder": [
+  "vps",
+  "laptop",
+  "homelab",
+  "cloud"
+ ],
+ "hosts": {
+  "laptop": {
+   "label": "Ноутбук",
+   "c": "--laptop",
+   "pos": [
+    -400,
+    0,
+    0
+   ]
+  },
+  "vps": {
+   "label": "VPS · облако",
+   "c": "--vps",
+   "pos": [
+    400,
+    0,
+    0
+   ]
+  },
+  "homelab": {
+   "label": "Домашний сервер",
+   "c": "--homelab",
+   "pos": [
+    0,
+    -360,
+    140
+   ]
+  },
+  "cloud": {
+   "label": "Внешние сервисы",
+   "c": "--cloud",
+   "pos": [
+    0,
+    360,
+    -140
+   ]
+  }
+ },
+ "groups": {
+  "core": {
+   "label": "Ядро CRM",
+   "c": "#4c8dff",
+   "info": "База, API и веб-интерфейс личной CRM. Остальные контуры пишут сюда события и биения и читают отсюда задачи и заметки."
+  },
+  "network": {
+   "label": "Сеть",
+   "c": "#22c7e8",
+   "info": "Точки входа, TLS и частная сеть WireGuard между машинами: домашние машины доступны без открытых портов."
+  },
+  "backup": {
+   "label": "Бэкапы",
+   "c": "#b8e04a",
+   "info": "Ночной зашифрованный дамп на VPS, забор на домашний сервер, внешняя копия restic и ежемесячная проверка восстановления."
+  },
+  "automation": {
+   "label": "Автоматизации",
+   "c": "#ffa53d",
+   "info": "Таймеры и скрипты: сбор RSS, утренний дайджест, синхронизация заметок, локальная модель для пересказа."
+  },
+  "media": {
+   "label": "Медиа",
+   "c": "#e86af0",
+   "info": "Медиатека на домашнем сервере и её обслуживание."
+  },
+  "monitoring": {
+   "label": "Мониторинг",
+   "c": "#2fd6a8",
+   "info": "Агенты пульса на каждой машине: биения таймеров в CRM, тревога — когда задача молчит дольше обещанного."
+  },
+  "web": {
+   "label": "Сайты",
+   "c": "#7f86ff",
+   "info": "Публичные сайты, которые собирает CI."
+  },
+  "dev": {
+   "label": "Разработка",
+   "c": "#ff7552",
+   "info": "Рабочее место: Claude Code с MCP-доступом к CRM, папки проектов, локальный стенд."
+  },
+  "infra": {
+   "label": "Машины",
+   "c": "#8798b0",
+   "info": "Сами машины."
+  },
+  "external": {
+   "label": "Внешние сервисы",
+   "c": "#6fb7a8",
+   "info": "Сервисы, на которые опираются системы."
+  }
+ },
+ "nodes": [
+  {
+   "id": "host-homelab",
+   "host": "homelab",
+   "kind": "machine",
+   "group": "infra",
+   "purpose": "Тяжёлые и долгие задачи, медиатека и вторая копия бэкапов. Наружу не открыт, доступ — через WireGuard.",
+   "how": "8 ядер, 32 ГБ RAM, два диска в RAID1, Debian 13.",
+   "tech": "Debian 13, Docker, mdadm",
+   "name": "Домашний сервер · мини-ПК",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "jellyfin",
+   "host": "homelab",
+   "kind": "app",
+   "group": "media",
+   "purpose": "Медиатека для телевизора и телефона.",
+   "how": "контейнер, аппаратное транскодирование VAAPI, библиотека на /mnt/media.",
+   "tech": "Jellyfin 10.10",
+   "name": "Jellyfin",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "media-index",
+   "host": "homelab",
+   "kind": "timer",
+   "group": "media",
+   "purpose": "Раз в час пересканирует медиатеку и обновляет метаданные.",
+   "how": "systemd-таймер → Jellyfin API; на ошибке — биение fail в пульс.",
+   "tech": "bash, curl",
+   "name": "media-index.timer",
+   "status": "failed",
+   "statusNote": "/mnt/media не смонтирован после перезагрузки"
+  },
+  {
+   "id": "media-disk",
+   "host": "homelab",
+   "kind": "share",
+   "group": "media",
+   "purpose": "Диски медиатеки.",
+   "how": "mdadm RAID1, ext4.",
+   "tech": "mdadm",
+   "name": "/mnt/media (RAID1)",
+   "status": "partial",
+   "statusNote": "не смонтирован автоматически: в fstab нет nofail"
+  },
+  {
+   "id": "restic-pull",
+   "host": "homelab",
+   "kind": "timer",
+   "group": "backup",
+   "purpose": "Забирает зашифрованные дампы с VPS и кладёт в локальный и облачный репозиторий restic.",
+   "how": "06:30, ssh-ключ с принудительной командой (только отдача файлов), restic forget --keep-daily 14.",
+   "tech": "restic",
+   "name": "restic-pull.timer",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "restore-check",
+   "host": "homelab",
+   "kind": "timer",
+   "group": "backup",
+   "purpose": "Раз в месяц восстанавливает последний дамп в пустой Postgres и сверяет число строк.",
+   "how": "временный контейнер, pg_restore, сравнение с метриками из CRM.",
+   "tech": "bash, docker",
+   "name": "restore-check.timer",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "ollama",
+   "host": "homelab",
+   "kind": "model",
+   "group": "automation",
+   "purpose": "Разметка и пересказ заметок без отправки данных наружу.",
+   "how": "модель 8B в 4 бит, API только в сети wg.",
+   "tech": "llama.cpp",
+   "name": "Локальная LLM",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "notes-digest",
+   "host": "homelab",
+   "kind": "timer",
+   "group": "automation",
+   "purpose": "Каждое утро собирает новые заметки из RSS в короткий дайджест.",
+   "how": "читает заметки через API CRM, пересказывает локальной моделью, пишет одну заметку-дайджест.",
+   "tech": "Python",
+   "name": "notes-digest.timer",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "pulse-agent-homelab",
+   "host": "homelab",
+   "kind": "agent",
+   "group": "monitoring",
+   "purpose": "Биения таймеров домашнего сервера; если молчит он сам — в пульсе одна тревога по машине, а не по каждой задаче.",
+   "how": "каждые 5 минут, через WireGuard.",
+   "tech": "Python",
+   "name": "Агент пульса (домашний сервер)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "host-laptop",
+   "host": "laptop",
+   "kind": "machine",
+   "group": "infra",
+   "purpose": "Рабочая машина: разработка, Claude Code, заметки. Спит и уезжает — поэтому на нём нет ничего, что должно работать по расписанию.",
+   "how": "Apple Silicon, launchd для своих агентов, WireGuard до VPS.",
+   "tech": "macOS",
+   "name": "Ноутбук · macOS",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "claude-code",
+   "host": "laptop",
+   "kind": "tool",
+   "group": "dev",
+   "purpose": "Агент для кода; через MCP видит задачи и проекты CRM, пишет в журнал и закрывает этапы.",
+   "how": "MCP-сервер crm по stdio, ключ с ролью agent.",
+   "tech": "Claude Code, MCP",
+   "name": "Claude Code",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "crm-mcp",
+   "host": "laptop",
+   "kind": "mcp",
+   "group": "dev",
+   "purpose": "Инструменты today, tasks, project_journal, project_stage, search, pulse.",
+   "how": "тонкий клиент к REST API с X-API-Key; правит файл дорожной карты на диске.",
+   "tech": "Python, mcp",
+   "name": "MCP-сервер CRM",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "project-folders",
+   "host": "laptop",
+   "kind": "share",
+   "group": "dev",
+   "purpose": "Спецификация, дорожная карта и журнал каждого проекта — источник правды для CRM.",
+   "how": "Markdown; хук сессии отправляет свежую карту в CRM.",
+   "tech": "Markdown",
+   "name": "Папки проектов",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "notes-sync",
+   "host": "laptop",
+   "kind": "launchagent",
+   "group": "automation",
+   "purpose": "Двусторонняя синхронизация заметок CRM с папкой Markdown.",
+   "how": "раз в 15 минут, конфликт — обе версии с пометкой.",
+   "tech": "Python, launchd",
+   "name": "notes-sync (LaunchAgent)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "pulse-agent-laptop",
+   "host": "laptop",
+   "kind": "agent",
+   "group": "monitoring",
+   "purpose": "Биение ноутбука; пока он спит, пульс не считает его задачи тревогой.",
+   "how": "LaunchAgent, раз в 2 минуты.",
+   "tech": "Python, launchd",
+   "name": "Агент пульса (ноутбук)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "docker-desktop",
+   "host": "laptop",
+   "kind": "container",
+   "group": "dev",
+   "purpose": "Локальный стенд CRM — копия прод-стека.",
+   "how": "colima start → docker compose up; после работы — down.",
+   "tech": "Colima, Docker",
+   "name": "Colima (Docker)",
+   "status": "disabled",
+   "statusNote": "запускается только на время работы: ноутбуку нужна память"
+  },
+  {
+   "id": "ext-anthropic",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Модель для Claude Code.",
+   "how": "",
+   "tech": "",
+   "name": "Anthropic API",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "host-vps",
+   "host": "vps",
+   "kind": "machine",
+   "group": "infra",
+   "purpose": "Единственная машина с публичным адресом: точки входа по HTTPS, база, API и VPN-вход для домашних машин.",
+   "how": "2 vCPU, 4 ГБ RAM, 60 ГБ диск. Docker для Postgres и API, systemd-таймеры для остального, fail2ban, unattended-upgrades.",
+   "tech": "Ubuntu 24.04, Docker, systemd",
+   "name": "VPS · облако, Ubuntu 24.04",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "nginx",
+   "host": "vps",
+   "kind": "proxy",
+   "group": "network",
+   "purpose": "Принимает HTTPS и раздаёт запросы контейнерам и статике.",
+   "how": "80/443, TLS от Let's Encrypt, лимит частоты на /login, HSTS.",
+   "tech": "nginx 1.26",
+   "name": "nginx (фронт-прокси)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "certbot-timer",
+   "host": "vps",
+   "kind": "timer",
+   "group": "network",
+   "purpose": "Дважды в сутки проверяет сертификаты и продлевает за 30 дней до конца.",
+   "how": "systemd-таймер, после продления — reload nginx и биение в пульс.",
+   "tech": "certbot",
+   "name": "certbot.timer",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "postgres",
+   "host": "vps",
+   "kind": "db",
+   "group": "core",
+   "purpose": "Одна база для CRM: схемы crm (данные) и hub (лента и биения).",
+   "how": "контейнер, порт опубликован только во внутреннюю сеть compose, пароль — docker secret.",
+   "tech": "postgres:17-alpine",
+   "name": "PostgreSQL 17",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "crm-api",
+   "host": "vps",
+   "kind": "service",
+   "group": "core",
+   "purpose": "REST API личной CRM: задачи, проекты, заметки, календарь, лента событий и пульс фоновых задач.",
+   "how": "uvicorn, миграции Alembic при старте, healthcheck /api/v2/health.",
+   "tech": "Python 3.12, FastAPI, SQLModel",
+   "name": "CRM API (FastAPI)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "crm-web",
+   "host": "vps",
+   "kind": "frontend",
+   "group": "core",
+   "purpose": "Веб-интерфейс CRM; отдаёт статику и проксирует /api в контейнер API.",
+   "how": "React-сборка в образе nginx, кэш ассетов навсегда, index.html — без кэша.",
+   "tech": "React 19, Vite, Tailwind",
+   "name": "CRM SPA (nginx в контейнере)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "backup-timer",
+   "host": "vps",
+   "kind": "timer",
+   "group": "backup",
+   "purpose": "Ночной дамп базы, шифрование, хранение трёх последних копий.",
+   "how": "04:10, pg_dump → openssl enc; дамп меньше 70 % прошлого — сбой, а не успех. Копии забирает домашний сервер.",
+   "tech": "bash, openssl",
+   "name": "crm-backup.timer",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "wireguard",
+   "host": "vps",
+   "kind": "service",
+   "group": "network",
+   "purpose": "Частная сеть между VPS, домашним сервером и ноутбуком: домашние машины доступны без открытых портов.",
+   "how": "UDP 51820, по пиру на машину, AllowedIPs только подсеть wg.",
+   "tech": "wireguard-tools",
+   "name": "WireGuard (wg0)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "rss-collector",
+   "host": "vps",
+   "kind": "timer",
+   "group": "automation",
+   "purpose": "Раз в полчаса собирает RSS-ленты и складывает новые записи в заметки CRM.",
+   "how": "Python-скрипт, повтор с экспоненциальной паузой, external_id против дублей.",
+   "tech": "Python, httpx, feedparser",
+   "name": "rss-collector.timer",
+   "status": "partial",
+   "statusNote": "два источника отвечают 503"
+  },
+  {
+   "id": "blog-static",
+   "host": "vps",
+   "kind": "app",
+   "group": "web",
+   "purpose": "Статический сайт, который собирает CI и выкладывает по rsync.",
+   "how": "каталог /srv/blog, nginx отдаёт с кэшированием.",
+   "tech": "Astro",
+   "name": "Блог (статика)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "grafana",
+   "host": "vps",
+   "kind": "app",
+   "group": "monitoring",
+   "purpose": "Графики нагрузки машин.",
+   "how": "контейнер остановлен, данные тома сохранены.",
+   "tech": "Grafana 11",
+   "name": "Grafana",
+   "status": "disabled",
+   "statusNote": "выключена: пульса CRM хватает"
+  },
+  {
+   "id": "node-exporter",
+   "host": "vps",
+   "kind": "service",
+   "group": "monitoring",
+   "purpose": "Метрики машины для агента пульса.",
+   "how": "только localhost:9100.",
+   "tech": "prometheus node_exporter",
+   "name": "node_exporter",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "pulse-agent-vps",
+   "host": "vps",
+   "kind": "agent",
+   "group": "monitoring",
+   "purpose": "Раз в 5 минут опрашивает таймеры systemd и шлёт пачку биений в CRM.",
+   "how": "systemctl list-timers + последний код выхода юнитов → POST /feed/beats.",
+   "tech": "Python",
+   "name": "Агент пульса (VPS)",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "ext-internet",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Внешняя сеть.",
+   "how": "",
+   "tech": "",
+   "name": "Интернет",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "ext-letsencrypt",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Бесплатные TLS-сертификаты по ACME.",
+   "how": "",
+   "tech": "",
+   "name": "Let's Encrypt",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "ext-telegram",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Канал тревог: сообщения о сбоях фоновых задач.",
+   "how": "",
+   "tech": "",
+   "name": "Telegram Bot API",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "ext-github",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Репозитории и CI (Actions).",
+   "how": "",
+   "tech": "",
+   "name": "GitHub",
+   "status": "up",
+   "statusNote": ""
+  },
+  {
+   "id": "ext-rss",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Блоги и новостные ленты.",
+   "how": "",
+   "tech": "",
+   "name": "RSS-источники",
+   "status": "partial",
+   "statusNote": "2 из 14 отвечают 503"
+  },
+  {
+   "id": "ext-s3",
+   "host": "cloud",
+   "kind": "external",
+   "group": "external",
+   "purpose": "Внешняя копия бэкапов restic.",
+   "how": "",
+   "tech": "",
+   "name": "Объектное хранилище (S3)",
+   "status": "up",
+   "statusNote": ""
+  }
+ ],
+ "links": [
+  {
+   "source": "jellyfin",
+   "target": "media-disk",
+   "via": "bind",
+   "what": "библиотека"
+  },
+  {
+   "source": "media-index",
+   "target": "jellyfin",
+   "via": "http API",
+   "what": "пересканирование"
+  },
+  {
+   "source": "media-index",
+   "target": "crm-api",
+   "via": "POST /feed/beat",
+   "what": "биение"
+  },
+  {
+   "source": "restic-pull",
+   "target": "backup-timer",
+   "via": "ssh",
+   "what": "забор дампов"
+  },
+  {
+   "source": "restic-pull",
+   "target": "ext-s3",
+   "via": "restic",
+   "what": "внешняя копия"
+  },
+  {
+   "source": "restore-check",
+   "target": "restic-pull",
+   "via": "restic restore",
+   "what": "последний дамп"
+  },
+  {
+   "source": "restore-check",
+   "target": "crm-api",
+   "via": "POST /feed/beat",
+   "what": "результат проверки"
+  },
+  {
+   "source": "notes-digest",
+   "target": "ollama",
+   "via": "http",
+   "what": "пересказ"
+  },
+  {
+   "source": "notes-digest",
+   "target": "crm-api",
+   "via": "GET/POST /notes",
+   "what": "заметки"
+  },
+  {
+   "source": "pulse-agent-homelab",
+   "target": "crm-api",
+   "via": "POST /feed/beats",
+   "what": "биения"
+  },
+  {
+   "source": "pulse-agent-homelab",
+   "target": "wireguard",
+   "via": "wg",
+   "what": "канал до VPS"
+  },
+  {
+   "source": "claude-code",
+   "target": "crm-mcp",
+   "via": "stdio",
+   "what": "инструменты"
+  },
+  {
+   "source": "claude-code",
+   "target": "ext-anthropic",
+   "via": "https",
+   "what": "модель"
+  },
+  {
+   "source": "crm-mcp",
+   "target": "crm-api",
+   "via": "https",
+   "what": "REST"
+  },
+  {
+   "source": "crm-mcp",
+   "target": "project-folders",
+   "via": "файлы",
+   "what": "дорожные карты"
+  },
+  {
+   "source": "notes-sync",
+   "target": "crm-api",
+   "via": "/notes",
+   "what": "синхронизация"
+  },
+  {
+   "source": "notes-sync",
+   "target": "crm-api",
+   "via": "POST /feed/beat",
+   "what": "биение"
+  },
+  {
+   "source": "pulse-agent-laptop",
+   "target": "crm-api",
+   "via": "POST /feed/beat",
+   "what": "биение"
+  },
+  {
+   "source": "host-vps",
+   "target": "ext-internet",
+   "via": "eth0",
+   "what": "весь исходящий трафик"
+  },
+  {
+   "source": "nginx",
+   "target": "crm-web",
+   "via": "http",
+   "what": "8080 : SPA и /api"
+  },
+  {
+   "source": "nginx",
+   "target": "blog-static",
+   "via": "файлы",
+   "what": "статический блог"
+  },
+  {
+   "source": "nginx",
+   "target": "grafana",
+   "via": "http",
+   "what": "3000 : /grafana/"
+  },
+  {
+   "source": "nginx",
+   "target": "ext-letsencrypt",
+   "via": "ACME",
+   "what": "продление сертификатов"
+  },
+  {
+   "source": "certbot-timer",
+   "target": "nginx",
+   "via": "reload",
+   "what": "новые сертификаты"
+  },
+  {
+   "source": "certbot-timer",
+   "target": "crm-api",
+   "via": "POST /feed/beat",
+   "what": "биение"
+  },
+  {
+   "source": "crm-api",
+   "target": "postgres",
+   "via": "psycopg",
+   "what": "все данные"
+  },
+  {
+   "source": "crm-api",
+   "target": "ext-telegram",
+   "via": "Bot API",
+   "what": "тревоги пульса"
+  },
+  {
+   "source": "crm-web",
+   "target": "crm-api",
+   "via": "http",
+   "what": "8000 : /api"
+  },
+  {
+   "source": "backup-timer",
+   "target": "postgres",
+   "via": "pg_dump",
+   "what": "дамп"
+  },
+  {
+   "source": "backup-timer",
+   "target": "crm-api",
+   "via": "POST /feed/beat",
+   "what": "биение"
+  },
+  {
+   "source": "wireguard",
+   "target": "host-homelab",
+   "via": "wg",
+   "what": "туннель"
+  },
+  {
+   "source": "wireguard",
+   "target": "host-laptop",
+   "via": "wg",
+   "what": "туннель"
+  },
+  {
+   "source": "rss-collector",
+   "target": "ext-rss",
+   "via": "https",
+   "what": "ленты"
+  },
+  {
+   "source": "rss-collector",
+   "target": "crm-api",
+   "via": "POST /notes",
+   "what": "новые записи"
+  },
+  {
+   "source": "ext-github",
+   "target": "blog-static",
+   "via": "rsync из Actions",
+   "what": "выкладка"
+  },
+  {
+   "source": "pulse-agent-vps",
+   "target": "node-exporter",
+   "via": "http",
+   "what": "чтение метрик"
+  },
+  {
+   "source": "pulse-agent-vps",
+   "target": "crm-api",
+   "via": "POST /feed/beats",
+   "what": "биения таймеров"
+  }
+ ],
+ "problems": [
+  "Домашний сервер: после перезагрузки не смонтирован /mnt/media — в fstab нет nofail, таймер индексации падает каждый час.",
+  "VPS: RSS-сборщик получает 503 от двух источников третьи сутки — стоит убрать их из списка.",
+  "VPS: Grafana выключена, но том с данными занимает 1,2 ГБ — решить, удалять ли."
+ ]
+}
